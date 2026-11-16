@@ -72,6 +72,9 @@ func New(cfg Config) (*Adapter, error) {
 func (a *Adapter) Provider() core.Provider { return core.ProviderDigiPay }
 
 func (a *Adapter) CreateInvoice(ctx context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	bearer := strings.TrimSpace(in.Extra["bearer_token"])
 	if bearer == "" {
 		return nil, fmt.Errorf("%w: digipay requires Extra[\"bearer_token\"]", core.ErrInvalidInput)

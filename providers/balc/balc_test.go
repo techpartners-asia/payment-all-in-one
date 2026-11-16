@@ -106,7 +106,7 @@ func TestCreateInvoiceRefusesWithoutCredit(t *testing.T) {
 			f := &fakeBalc{limit: limit, loanReply: `"ACC-001"`}
 			a := newTestAdapter(t, f)
 
-			_, err := a.CreateInvoice(context.Background(), core.CreateInvoiceInput{Amount: 5000, CustomerID: "42"})
+			_, err := a.CreateInvoice(context.Background(), core.CreateInvoiceInput{OrderID: "o1", Amount: 5000, CustomerID: "42"})
 			if !errors.Is(err, ErrCreditUnavailable) {
 				t.Fatalf("err = %v, want ErrCreditUnavailable", err)
 			}
@@ -121,7 +121,7 @@ func TestCreateInvoiceRejectsNonStringLoanReply(t *testing.T) {
 	f := &fakeBalc{limit: usableLimit(500000), loanReply: `{"error":"customer blocked"}`}
 	a := newTestAdapter(t, f)
 
-	inv, err := a.CreateInvoice(context.Background(), core.CreateInvoiceInput{Amount: 5000, CustomerID: "42"})
+	inv, err := a.CreateInvoice(context.Background(), core.CreateInvoiceInput{OrderID: "o1", Amount: 5000, CustomerID: "42"})
 	var pe *core.ProviderError
 	if !errors.As(err, &pe) || inv != nil {
 		t.Fatalf("inv = %+v, err = %v, want ProviderError and no invoice", inv, err)
@@ -154,7 +154,7 @@ func TestTransportFailureReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.CreateInvoice(context.Background(), core.CreateInvoiceInput{Amount: 5000, CustomerID: "42"})
+	_, err = a.CreateInvoice(context.Background(), core.CreateInvoiceInput{OrderID: "o1", Amount: 5000, CustomerID: "42"})
 	var pe *core.ProviderError
 	if !errors.As(err, &pe) {
 		t.Fatalf("err = %v, want ProviderError", err)

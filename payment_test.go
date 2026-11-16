@@ -16,6 +16,8 @@ type fakeGateway struct {
 
 func (f *fakeGateway) Provider() payment.Provider { return f.provider }
 
+func (f *fakeGateway) InvoiceRules() payment.InvoiceRules { return payment.InvoiceRules{} }
+
 func (f *fakeGateway) CreateInvoice(_ context.Context, in payment.CreateInvoiceInput) (*payment.Invoice, error) {
 	f.created = append(f.created, in)
 	return &payment.Invoice{Provider: f.provider, InvoiceID: "inv-" + in.OrderID, OrderID: in.OrderID, Amount: in.Amount, Status: payment.StatusPending}, nil

@@ -61,6 +61,9 @@ func New(cfg Config) (*Adapter, error) {
 func (a *Adapter) Provider() core.Provider { return core.ProviderMonPay }
 
 func (a *Adapter) CreateInvoice(_ context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	if in.Amount <= 0 || math.IsInf(in.Amount, 0) || math.IsNaN(in.Amount) {
 		return nil, fmt.Errorf("%w: monpay amount must be positive, got %v", core.ErrInvalidInput, in.Amount)
 	}

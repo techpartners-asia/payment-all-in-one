@@ -76,6 +76,9 @@ func New(cfg Config) (*Adapter, error) {
 func (a *Adapter) Provider() core.Provider { return core.ProviderUPoint }
 
 func (a *Adapter) CreateInvoice(_ context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	card := in.Extra["card_number"]
 	if card == "" && in.Phone == "" {
 		return nil, fmt.Errorf("%w: upoint requires Extra[\"card_number\"] or Phone", core.ErrInvalidInput)

@@ -83,6 +83,9 @@ func newAdapter(client pocketsdk.Pocket, now func() time.Time) *Adapter {
 func (a *Adapter) Provider() core.Provider { return core.ProviderPocket }
 
 func (a *Adapter) CreateInvoice(ctx context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	if in.OrderID == "" {
 		return nil, fmt.Errorf("%w: pocket requires OrderID", core.ErrInvalidInput)
 	}

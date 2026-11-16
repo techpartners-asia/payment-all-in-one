@@ -69,6 +69,9 @@ func New(cfg Config) (*Adapter, error) {
 func (a *Adapter) Provider() core.Provider { return core.ProviderArdPay }
 
 func (a *Adapter) CreateInvoice(_ context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	if in.OrderID == "" {
 		return nil, fmt.Errorf("%w: OrderID is required", core.ErrInvalidInput)
 	}

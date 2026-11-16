@@ -138,6 +138,7 @@ func TestCreateInvoiceCallbackOverride(t *testing.T) {
 	a := newTestAdapter(t, f)
 
 	_, err := a.CreateInvoice(context.Background(), core.CreateInvoiceInput{
+		OrderID:     "o1",
 		Amount:      1000,
 		Phone:       "99112233",
 		Description: "phone case",
@@ -170,7 +171,7 @@ func TestCreateInvoiceProviderRejection(t *testing.T) {
 			f := &fakeStorePay{loanReply: reply}
 			a := newTestAdapter(t, f)
 
-			_, err := a.CreateInvoice(context.Background(), core.CreateInvoiceInput{Amount: 1000, Phone: "99112233"})
+			_, err := a.CreateInvoice(context.Background(), core.CreateInvoiceInput{OrderID: "o1", Amount: 1000, Phone: "99112233"})
 			var pe *core.ProviderError
 			if !errors.As(err, &pe) || pe.Provider != core.ProviderStorePay || pe.Op != "create_invoice" {
 				t.Fatalf("err = %v, want ProviderError for storepay create_invoice", err)

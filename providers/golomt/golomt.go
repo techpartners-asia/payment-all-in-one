@@ -137,6 +137,9 @@ func parseFlag(extra map[string]string, key string) (bool, error) {
 }
 
 func (a *Adapter) CreateInvoice(_ context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	if in.OrderID == "" {
 		return nil, fmt.Errorf("%w: golomt requires OrderID", core.ErrInvalidInput)
 	}

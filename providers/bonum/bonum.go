@@ -76,11 +76,14 @@ func New(cfg Config) (*Adapter, error) {
 func (a *Adapter) Provider() core.Provider { return core.ProviderBonum }
 
 func (a *Adapter) CreateInvoice(ctx context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	expiresIn := int64(in.ExpiresIn / time.Second)
 	if expiresIn <= 0 {
 		expiresIn = int64(defaultExpiry / time.Second)
 	}
-	switch flow := in.Extra["flow"]; flow {
+	switch flow := strings.ToLower(in.Extra["flow"]); flow {
 	case "", "qr":
 		return a.createQR(ctx, in, expiresIn)
 	case "checkout":
@@ -127,9 +130,6 @@ func (a *Adapter) createCheckout(ctx context.Context, in core.CreateInvoiceInput
 	returnURL := in.ReturnURL
 	if returnURL == "" {
 		returnURL = a.cfg.ReturnURL
-	}
-	if returnURL == "" {
-		return nil, fmt.Errorf("%w: bonum checkout requires ReturnURL", core.ErrInvalidInput)
 	}
 	req := bonum.CreateInvoiceInput{
 		Amount:        in.Amount,

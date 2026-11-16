@@ -73,6 +73,9 @@ func New(cfg Config) (*Adapter, error) {
 func (a *Adapter) Provider() core.Provider { return core.ProviderTino }
 
 func (a *Adapter) CreateInvoice(ctx context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	req := &tino.InvoiceRequest{
 		WalletID:      a.cfg.WalletID,
 		ExpiresMinute: int(math.Ceil(in.ExpiresIn.Minutes())),

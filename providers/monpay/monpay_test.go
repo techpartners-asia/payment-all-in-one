@@ -80,7 +80,7 @@ func TestCreateInvoiceGeneratesQR(t *testing.T) {
 
 func TestCreateInvoiceCallbackOverride(t *testing.T) {
 	a, fake := newTestAdapter(t)
-	_, err := a.CreateInvoice(context.Background(), core.CreateInvoiceInput{Amount: 100, CallbackURL: "https://merchant.example/other"})
+	_, err := a.CreateInvoice(context.Background(), core.CreateInvoiceInput{OrderID: "o1", Amount: 100, CallbackURL: "https://merchant.example/other"})
 	if err != nil {
 		t.Fatal(err)
 	}

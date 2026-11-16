@@ -49,6 +49,8 @@ type (
 	CancelInvoiceInput = core.CancelInvoiceInput
 	RefundInput        = core.RefundInput
 	ProviderError      = core.ProviderError
+	InvoiceRules       = core.InvoiceRules
+	Field              = core.Field
 )
 
 const (
@@ -74,6 +76,18 @@ const (
 	StatusCancelled = core.StatusCancelled
 	StatusRefunded  = core.StatusRefunded
 )
+
+const (
+	FieldOrderID     = core.FieldOrderID
+	FieldAmount      = core.FieldAmount
+	FieldDescription = core.FieldDescription
+	FieldCallbackURL = core.FieldCallbackURL
+	FieldReturnURL   = core.FieldReturnURL
+	FieldPhone       = core.FieldPhone
+	FieldCustomerID  = core.FieldCustomerID
+)
+
+func ExtraField(key string) Field { return core.ExtraField(key) }
 
 var (
 	ErrNotConfigured = core.ErrNotConfigured
@@ -174,12 +188,29 @@ func (c *Client) Gateway(p Provider) (Gateway, error) {
 	return gw, nil
 }
 
-func (c *Client) CreateInvoice(ctx context.Context, in CreateInvoiceInput) (*Invoice, error) {
-	if in.OrderID == "" {
-		return nil, fmt.Errorf("%w: order id is required", ErrInvalidInput)
+// InvoiceRules reports what CreateInvoice requires and accepts for p, so a
+// checkout form can ask for the right fields up front.
+func (c *Client) InvoiceRules(p Provider) (InvoiceRules, error) {
+	gw, err := c.Gateway(p)
+	if err != nil {
+		return InvoiceRules{}, err
 	}
-	if in.Amount <= 0 {
-		return nil, fmt.Errorf("%w: amount must be positive", ErrInvalidInput)
+	return gw.InvoiceRules(), nil
+}
+
+// ValidateInvoice runs every CreateInvoice input check without calling the
+// provider. The error joins all problems found, each wrapping ErrInvalidInput.
+func (c *Client) ValidateInvoice(in CreateInvoiceInput) error {
+	gw, err := c.Gateway(in.Provider)
+	if err != nil {
+		return err
+	}
+	return gw.InvoiceRules().Validate(in.Provider, in)
+}
+
+func (c *Client) CreateInvoice(ctx context.Context, in CreateInvoiceInput) (*Invoice, error) {
+	if err := c.ValidateInvoice(in); err != nil {
+		return nil, err
 	}
 	gw, err := c.Gateway(in.Provider)
 	if err != nil {

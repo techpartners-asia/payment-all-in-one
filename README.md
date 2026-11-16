@@ -52,6 +52,57 @@ st, err := client.CheckInvoice(ctx, payment.CheckInvoiceInput{
 if st.Status == payment.StatusPaid { /* fulfil */ }
 ```
 
+### One input for every provider, validated before any network call
+
+`CreateInvoiceInput` is the same for all 15 providers. Each provider declares
+its own `InvoiceRules`:
+
+- which fields it requires
+- which fields it needs at least one of
+- whether it accepts only whole tögrög
+- every `Extra` key it reads, with the values it accepts
+
+`CreateInvoice` enforces these rules before any network call. The adapters
+enforce them too, so calling a provider package directly is also safe.
+
+- **All problems at once.** A wrong input returns every problem in a single
+  `ErrInvalidInput` error, for example
+  `storepay: OrderID is required; storepay: Phone is required`.
+- **Typos are rejected.** An unknown `Extra` key, such as `card_no` instead of
+  `card_number`, is an error instead of being silently ignored.
+- **No silent rounding.** Providers that need whole tögrög reject `1500.50`.
+  The others pass decimals through unchanged.
+
+```go
+rules, _ := client.InvoiceRules(payment.ProviderStorePay)
+// rules.Required == [Phone]: ask the customer for a phone number.
+
+if err := client.ValidateInvoice(in); err != nil {
+	// show err to the user; nothing was sent to the provider
+}
+```
+
+| Provider | Needs beyond OrderID + Amount | Whole tögrög |
+|---|---|---|
+| StorePay | `Phone` | |
+| UPoint | `Phone` or `Extra["card_number"]` | |
+| DigiPay | `Extra["bearer_token"]` | |
+| Balc | `CustomerID` (numeric) | yes |
+| QPay, Golomt | `CallbackURL`, unless set in config | QPay only |
+| Bonum | `ReturnURL` for `Extra["flow"]="checkout"`, unless set in config | |
+| Simple, MongolChat | none | yes |
+| Tino, SocialPay, MonPay, Pocket, HiPay, ArdPay | none | |
+
+`rules_test.go` keeps these rules honest. It fails in three cases:
+
+- an adapter rejects input that its declared rules accept
+- an adapter reads an `Extra` key it does not declare
+- an adapter declares a key it never reads
+
+A requirement that depends on another field, such as Bonum's `ReturnURL`
+being needed only when `flow` is `checkout`, goes in `InvoiceRules.Check`.
+`ValidateInvoice` runs those checks too.
+
 A provider is enabled when its config pointer is set. `New` validates every
 enabled config and fails at startup if any required field is empty.
 

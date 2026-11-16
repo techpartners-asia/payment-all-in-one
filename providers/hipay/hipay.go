@@ -57,6 +57,9 @@ func New(cfg Config) (*Adapter, error) {
 func (a *Adapter) Provider() core.Provider { return core.ProviderHiPay }
 
 func (a *Adapter) CreateInvoice(_ context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	res, err := a.client.Checkout(in.Amount)
 	if err != nil {
 		return nil, core.Wrap(core.ProviderHiPay, "create_invoice", err)

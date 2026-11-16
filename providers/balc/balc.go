@@ -57,6 +57,9 @@ func New(cfg Config) (*Adapter, error) {
 func (a *Adapter) Provider() core.Provider { return core.ProviderBalc }
 
 func (a *Adapter) CreateInvoice(_ context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	customerID, err := strconv.Atoi(in.CustomerID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: customer id must be a BALC numeric customer id, got %q", core.ErrInvalidInput, in.CustomerID)

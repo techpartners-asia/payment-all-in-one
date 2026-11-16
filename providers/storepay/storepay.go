@@ -75,6 +75,9 @@ func newSDK(cfg Config, callbackURL string) storepaysdk.Storepay {
 func (a *Adapter) Provider() core.Provider { return core.ProviderStorePay }
 
 func (a *Adapter) CreateInvoice(_ context.Context, in core.CreateInvoiceInput) (*core.Invoice, error) {
+	if err := a.InvoiceRules().Validate(a.Provider(), in); err != nil {
+		return nil, err
+	}
 	if in.Phone == "" {
 		return nil, fmt.Errorf("%w: phone is required", core.ErrInvalidInput)
 	}
