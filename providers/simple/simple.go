@@ -37,10 +37,18 @@ type Config struct {
 
 type Adapter struct {
 	cfg Config
-	// mu serializes SDK calls: the SDK caches its access token in unguarded fields.
-	mu  sync.Mutex
-	sdk simplesdk.Simple
+	// mu serializes SDK calls and guards clients: the SDK caches its access
+	// token in unguarded fields.
+	mu sync.Mutex
+	// clients holds one SDK client per callback URL. The SDK fixes the
+	// callback at construction and caches its token per client, so reusing a
+	// client is what keeps repeated callback overrides from logging in again.
+	clients map[string]simplesdk.Simple
 }
+
+// maxClients bounds clients so per-order callback URLs cannot grow it without
+// limit. Past it, an unseen callback URL gets a client used once.
+const maxClients = 16
 
 var _ core.Gateway = (*Adapter)(nil)
 
@@ -52,10 +60,19 @@ func New(cfg Config) (*Adapter, error) {
 	); err != nil {
 		return nil, err
 	}
-	return &Adapter{
-		cfg: cfg,
-		sdk: simplesdk.New(cfg.Username, cfg.Password, cfg.BaseURL, cfg.CallbackURL),
-	}, nil
+	return &Adapter{cfg: cfg, clients: map[string]simplesdk.Simple{}}, nil
+}
+
+// client returns the SDK client for callbackURL. The caller holds mu.
+func (a *Adapter) client(callbackURL string) simplesdk.Simple {
+	if c, ok := a.clients[callbackURL]; ok {
+		return c
+	}
+	c := simplesdk.New(a.cfg.Username, a.cfg.Password, a.cfg.BaseURL, callbackURL)
+	if len(a.clients) < maxClients {
+		a.clients[callbackURL] = c
+	}
+	return c
 }
 
 func (a *Adapter) Provider() core.Provider { return core.ProviderSimple }
@@ -76,15 +93,14 @@ func (a *Adapter) CreateInvoice(_ context.Context, in core.CreateInvoiceInput) (
 	}
 	expiresAt := time.Now().Add(expiresIn)
 
-	// The SDK fixes the callback URL at construction, so a per-call override
-	// needs its own client (and its own token request).
-	sdk := a.sdk
-	if in.CallbackURL != "" && in.CallbackURL != a.cfg.CallbackURL {
-		sdk = simplesdk.New(a.cfg.Username, a.cfg.Password, a.cfg.BaseURL, in.CallbackURL)
+	callbackURL := a.cfg.CallbackURL
+	if in.CallbackURL != "" {
+		callbackURL = in.CallbackURL
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	sdk := a.client(callbackURL)
 
 	res, err := recoverSDK(func() (simplesdk.SimpleCreateInvoiceResponse, error) {
 		return sdk.CreateInvoice(simplesdk.SimpleCreateInvoiceInput{
@@ -136,7 +152,7 @@ func (a *Adapter) CheckInvoice(_ context.Context, in core.CheckInvoiceInput) (*c
 
 	// The SDK appends order_id to the query string without escaping it.
 	res, err := recoverSDK(func() (simplesdk.SimpleSendInvoiceToNumberResponse, error) {
-		return a.sdk.GetInvoice(simplesdk.SimpleGetInvoiceRequest{OrderID: url.QueryEscape(in.InvoiceID)})
+		return a.client(a.cfg.CallbackURL).GetInvoice(simplesdk.SimpleGetInvoiceRequest{OrderID: url.QueryEscape(in.InvoiceID)})
 	})
 	if err != nil {
 		return nil, core.Wrap(core.ProviderSimple, "check_invoice", err)

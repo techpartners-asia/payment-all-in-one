@@ -41,10 +41,18 @@ type Config struct {
 
 type Adapter struct {
 	cfg Config
-	// mu serializes SDK calls: the SDK caches its access token in unguarded fields.
-	mu  sync.Mutex
-	sdk storepaysdk.Storepay
+	// mu serializes SDK calls and guards clients: the SDK caches its access
+	// token in unguarded fields.
+	mu sync.Mutex
+	// clients holds one SDK client per callback URL. The SDK fixes the
+	// callback at construction and caches its token per client, so reusing a
+	// client is what keeps repeated callback overrides from logging in again.
+	clients map[string]storepaysdk.Storepay
 }
+
+// maxClients bounds clients so per-order callback URLs cannot grow it without
+// limit. Past it, an unseen callback URL gets a client used once.
+const maxClients = 16
 
 var _ core.Gateway = (*Adapter)(nil)
 
@@ -60,16 +68,24 @@ func New(cfg Config) (*Adapter, error) {
 	); err != nil {
 		return nil, err
 	}
-	return &Adapter{cfg: cfg, sdk: newSDK(cfg, cfg.CallbackURL)}, nil
+	return &Adapter{cfg: cfg, clients: map[string]storepaysdk.Storepay{}}, nil
 }
 
-func newSDK(cfg Config, callbackURL string) storepaysdk.Storepay {
+// client returns the SDK client for callbackURL. The caller holds mu.
+func (a *Adapter) client(callbackURL string) storepaysdk.Storepay {
+	if c, ok := a.clients[callbackURL]; ok {
+		return c
+	}
 	// The SDK splices the app credentials into the token URL's query string
 	// unescaped, and uses them nowhere else.
-	return storepaysdk.New(
-		url.QueryEscape(cfg.AppUsername), url.QueryEscape(cfg.AppPassword),
-		cfg.Username, cfg.Password, cfg.AuthURL, cfg.BaseURL, cfg.StoreID, callbackURL,
+	c := storepaysdk.New(
+		url.QueryEscape(a.cfg.AppUsername), url.QueryEscape(a.cfg.AppPassword),
+		a.cfg.Username, a.cfg.Password, a.cfg.AuthURL, a.cfg.BaseURL, a.cfg.StoreID, callbackURL,
 	)
+	if len(a.clients) < maxClients {
+		a.clients[callbackURL] = c
+	}
+	return c
 }
 
 func (a *Adapter) Provider() core.Provider { return core.ProviderStorePay }
@@ -89,15 +105,14 @@ func (a *Adapter) CreateInvoice(_ context.Context, in core.CreateInvoiceInput) (
 		description = in.OrderID
 	}
 
-	// The SDK fixes the callback URL at construction, so a per-call override
-	// needs its own client (and its own token request).
-	sdk := a.sdk
-	if in.CallbackURL != "" && in.CallbackURL != a.cfg.CallbackURL {
-		sdk = newSDK(a.cfg, in.CallbackURL)
+	callbackURL := a.cfg.CallbackURL
+	if in.CallbackURL != "" {
+		callbackURL = in.CallbackURL
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	sdk := a.client(callbackURL)
 
 	loanID, err := recoverSDK(func() (int64, error) {
 		return sdk.Loan(storepaysdk.StorepayLoanInput{
@@ -129,7 +144,7 @@ func (a *Adapter) CheckInvoice(_ context.Context, in core.CheckInvoiceInput) (*c
 	defer a.mu.Unlock()
 
 	confirmed, err := recoverSDK(func() (bool, error) {
-		return a.sdk.LoanCheck(url.PathEscape(in.InvoiceID))
+		return a.client(a.cfg.CallbackURL).LoanCheck(url.PathEscape(in.InvoiceID))
 	})
 	if err != nil {
 		return nil, core.Wrap(core.ProviderStorePay, "check_invoice", err)

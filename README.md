@@ -159,6 +159,13 @@ config, how `InvoiceID` is chosen, the status mapping, and its `Extra` keys.
 - **Tino, QPay, Pocket.** The adapter caches the access token and refreshes it
   30 seconds before it expires. Concurrent callers share one login. If the
   provider rejects a token, the adapter logs in again and retries once.
+  QPay renews through `/auth/refresh` while its refresh token is live and
+  logs in only when it is not. Tino and Pocket have no refresh endpoint, so
+  they log in again.
+- **Simple, StorePay.** The SDK caches its token per client and fixes the
+  callback URL per client, so the adapter keeps one client per callback URL
+  (up to 16). A repeated `CallbackURL` override reuses that client's token
+  instead of logging in again.
 - **Golomt.** `Extra` keys:
   - `return_type`: `GET`, `POST` or `MOBILE`
   - `lang`: `MN` or `EN`

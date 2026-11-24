@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 type fakeStorePay struct {
 	mu          sync.Mutex
+	tokens      int
 	authQuery   map[string]string
 	loanBody    map[string]any
 	checkedPath string
@@ -30,6 +32,7 @@ func (f *fakeStorePay) handler(t *testing.T) http.Handler {
 		}
 		q := r.URL.Query()
 		f.mu.Lock()
+		f.tokens++
 		f.authQuery = map[string]string{"username": q.Get("username"), "password": q.Get("password"), "grant_type": q.Get("grant_type")}
 		f.mu.Unlock()
 		writeJSON(w, map[string]any{"access_token": "tok", "token_type": "bearer", "expires_in": 3600})
@@ -149,6 +152,25 @@ func TestCreateInvoiceCallbackOverride(t *testing.T) {
 	}
 	if f.loanBody["callbackUrl"] != "https://merchant.test/override" || f.loanBody["description"] != "phone case" {
 		t.Errorf("loan body = %v", f.loanBody)
+	}
+}
+
+func TestTokenIsReusedPerCallbackURL(t *testing.T) {
+	f := &fakeStorePay{}
+	a := newTestAdapter(t, f)
+	ctx := context.Background()
+
+	for i, cb := range []string{"https://merchant.test/override", "https://merchant.test/override", "", "https://merchant.test/cb"} {
+		in := core.CreateInvoiceInput{OrderID: fmt.Sprintf("order-%d", i), Amount: 1000, Phone: "99112233", CallbackURL: cb}
+		if _, err := a.CreateInvoice(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.CheckInvoice(ctx, core.CheckInvoiceInput{InvoiceID: "98765"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.tokens != 2 {
+		t.Fatalf("token requests = %d, want 2 (one per distinct callback URL)", f.tokens)
 	}
 }
 

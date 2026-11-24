@@ -6,6 +6,10 @@
 // CancelInvoice voids an unpaid invoice. Refund returns a paid payment in full
 // and needs RefundInput.TransactionID (the payment id CheckInvoice reports).
 //
+// The adapter logs in once and reuses the access token until shortly before it
+// expires. It then renews through /auth/refresh while the refresh token is
+// live, and logs in again only when that is not possible.
+//
 // Extra keys read by CreateInvoice:
 //   - "invoice_receiver_code": receiver code when CustomerID is empty (default "terminal").
 //   - "sender_branch_code": merchant branch code.
@@ -39,8 +43,8 @@ type Adapter struct {
 	client      qpay_v2.QPay
 	callbackURL string
 
-	// tokenMu serializes logins so concurrent calls with an expired token
-	// share one /auth/token round trip.
+	// tokenMu serializes renewals so concurrent calls with an expired token
+	// share one /auth/refresh or /auth/token round trip.
 	tokenMu sync.Mutex
 }
 
@@ -204,24 +208,35 @@ func withToken[T any](ctx context.Context, a *Adapter, call func() (T, error)) (
 	return call()
 }
 
-// ensureToken returns the access token now installed, logging in when there
+// ensureToken returns the access token now installed, renewing it when there
 // is none, it is about to expire, or it equals rejected.
 func (a *Adapter) ensureToken(ctx context.Context, rejected string) (string, error) {
 	a.tokenMu.Lock()
 	defer a.tokenMu.Unlock()
 
-	tok := a.client.Token()
-	fresh := !tok.IsZero() && tok.AccessToken != rejected &&
-		time.Now().Add(tokenRefreshMargin).Before(tok.ExpiresAt)
-	if fresh {
-		return tok.AccessToken, nil
+	cur := a.client.Token()
+	now := time.Now()
+	if !cur.IsZero() && cur.AccessToken != rejected && now.Add(tokenRefreshMargin).Before(cur.ExpiresAt) {
+		return cur.AccessToken, nil
 	}
-	tok, err := a.client.Login(ctx)
+	tok, err := a.renew(ctx, cur, now)
 	if err != nil {
 		return "", err
 	}
 	a.client.SetToken(tok)
 	return tok.AccessToken, nil
+}
+
+// renew trades a live refresh token for a new access token, and logs in with
+// the merchant credentials only when there is no usable refresh token or
+// QPay refuses it.
+func (a *Adapter) renew(ctx context.Context, cur qpay_v2.Token, now time.Time) (qpay_v2.Token, error) {
+	if cur.RefreshToken != "" && now.Add(tokenRefreshMargin).Before(cur.RefreshExpiresAt) {
+		if tok, err := a.client.Refresh(ctx, cur.RefreshToken); err == nil {
+			return tok, nil
+		}
+	}
+	return a.client.Login(ctx)
 }
 
 type paymentSummary struct {

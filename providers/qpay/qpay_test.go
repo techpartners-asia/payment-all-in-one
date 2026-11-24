@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +18,13 @@ import (
 )
 
 type fakeQPay struct {
-	logins       atomic.Int32
-	rejectNext   atomic.Bool
+	logins        atomic.Int32
+	refreshes     atomic.Int32
+	rejectNext    atomic.Bool
+	rejectRefresh atomic.Bool
+	// accessTTL and refreshTTL override the issued token lifetimes when set.
+	accessTTL    atomic.Int64
+	refreshTTL   atomic.Int64
 	lastInvoice  map[string]any
 	checkBody    string
 	lastDeletion string
@@ -33,13 +39,15 @@ func (f *fakeQPay) handler(t *testing.T) http.Handler {
 			return
 		}
 		n := f.logins.Add(1)
-		writeJSON(w, map[string]any{
-			"token_type":         "bearer",
-			"access_token":       "tok-" + string(rune('0'+n)),
-			"refresh_token":      "refresh",
-			"expires_in":         time.Now().Add(time.Hour).Unix(),
-			"refresh_expires_in": time.Now().Add(2 * time.Hour).Unix(),
-		})
+		f.writeToken(w, fmt.Sprintf("tok-%d", n))
+	})
+	mux.HandleFunc("POST /auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if f.rejectRefresh.Load() || r.Header.Get("Authorization") != "Bearer refresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		n := f.refreshes.Add(1)
+		f.writeToken(w, fmt.Sprintf("tok-r%d", n))
 	})
 	authed := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +87,22 @@ func (f *fakeQPay) handler(t *testing.T) http.Handler {
 		writeJSON(w, map[string]any{})
 	}))
 	return mux
+}
+
+func (f *fakeQPay) writeToken(w http.ResponseWriter, access string) {
+	ttl := func(v *atomic.Int64, def time.Duration) int64 {
+		if d := time.Duration(v.Load()); d != 0 {
+			return time.Now().Add(d).Unix()
+		}
+		return time.Now().Add(def).Unix()
+	}
+	writeJSON(w, map[string]any{
+		"token_type":         "bearer",
+		"access_token":       access,
+		"refresh_token":      "refresh",
+		"expires_in":         ttl(&f.accessTTL, time.Hour),
+		"refresh_expires_in": ttl(&f.refreshTTL, 2*time.Hour),
+	})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -189,8 +213,51 @@ func TestTokenIsReusedAndRenewedOnRejection(t *testing.T) {
 	if _, err := a.CheckInvoice(ctx, in); err != nil {
 		t.Fatalf("call after token rejection: %v", err)
 	}
-	if n := fake.logins.Load(); n != 2 {
-		t.Fatalf("logins after rejection = %d, want 2", n)
+	if l, r := fake.logins.Load(), fake.refreshes.Load(); l != 1 || r != 1 {
+		t.Fatalf("after rejection logins = %d, refreshes = %d, want 1 and 1", l, r)
+	}
+}
+
+func TestExpiringTokenIsRefreshedNotReissued(t *testing.T) {
+	a, fake := newTestAdapter(t)
+	fake.checkBody = `{"count":0,"paid_amount":0,"rows":[]}`
+	fake.accessTTL.Store(int64(10 * time.Second))
+	ctx := context.Background()
+	in := core.CheckInvoiceInput{InvoiceID: "inv-123"}
+
+	for range 3 {
+		if _, err := a.CheckInvoice(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if l, r := fake.logins.Load(), fake.refreshes.Load(); l != 1 || r != 2 {
+		t.Fatalf("logins = %d, refreshes = %d, want 1 login then a refresh per expiring token", l, r)
+	}
+}
+
+func TestLogsInAgainWhenRefreshIsUnusable(t *testing.T) {
+	cases := map[string]func(*fakeQPay){
+		"refresh token near expiry": func(f *fakeQPay) { f.refreshTTL.Store(int64(10 * time.Second)) },
+		"refresh token rejected":    func(f *fakeQPay) { f.rejectRefresh.Store(true) },
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			a, fake := newTestAdapter(t)
+			fake.checkBody = `{"count":0,"paid_amount":0,"rows":[]}`
+			fake.accessTTL.Store(int64(10 * time.Second))
+			setup(fake)
+			ctx := context.Background()
+			in := core.CheckInvoiceInput{InvoiceID: "inv-123"}
+
+			for range 2 {
+				if _, err := a.CheckInvoice(ctx, in); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if l, r := fake.logins.Load(), fake.refreshes.Load(); l != 2 || r != 0 {
+				t.Fatalf("logins = %d, refreshes = %d, want 2 and 0", l, r)
+			}
+		})
 	}
 }
 

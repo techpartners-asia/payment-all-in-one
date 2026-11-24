@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 type fakeSimple struct {
 	mu            sync.Mutex
+	tokens        int
 	created       map[string]any
 	assignedQuery string
 	checkedOrder  string
@@ -29,6 +31,9 @@ func (f *fakeSimple) handler(t *testing.T) http.Handler {
 			http.Error(w, "bad credentials", http.StatusUnauthorized)
 			return
 		}
+		f.mu.Lock()
+		f.tokens++
+		f.mu.Unlock()
 		writeJSON(w, map[string]any{"code": "200", "data": map[string]any{"access_token": "tok", "expires_in": 3600}})
 	})
 	mux.HandleFunc("POST /mbank-integration-gateway-service/integration/addInvoice/createInvoice", func(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +129,25 @@ func TestCreateInvoiceAssignsToPhoneAndOverridesCallback(t *testing.T) {
 	}
 	if f.assignedQuery != "invoice_uuid=inv-uuid-1&mobile=99112233" {
 		t.Errorf("assign query = %q", f.assignedQuery)
+	}
+}
+
+func TestTokenIsReusedPerCallbackURL(t *testing.T) {
+	f := &fakeSimple{}
+	a := newTestAdapter(t, f)
+	ctx := context.Background()
+
+	for i, cb := range []string{"https://merchant.test/override", "https://merchant.test/override", "", "https://merchant.test/cb"} {
+		in := core.CreateInvoiceInput{OrderID: fmt.Sprintf("order-%d", i), Amount: 1000, CallbackURL: cb}
+		if _, err := a.CreateInvoice(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.CheckInvoice(ctx, core.CheckInvoiceInput{InvoiceID: "order-0"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.tokens != 2 {
+		t.Fatalf("token requests = %d, want 2 (one per distinct callback URL)", f.tokens)
 	}
 }
 
